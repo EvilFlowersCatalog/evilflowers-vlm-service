@@ -1,0 +1,87 @@
+[project]
+name = "evilflowers-vlm"
+version = "0.1.0"
+description = "Shared PaddleOCR-VL formula service: POST /v1/formulas"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# The HTTP layer only: tests and lint run without torch. The model lives in the `model`
+# extra, the OTLP exporter in `otel`; the image installs both.
+dependencies = [
+    "fastapi>=0.120",
+    "uvicorn>=0.38",
+    "pillow>=12.0",
+    "pydantic>=2.11",
+    "prometheus-client>=0.23",
+    "opentelemetry-api>=1.38",
+]
+
+[project.optional-dependencies]
+# Pinned to the venv the model was validated in (torch 2.12.0, transformers 5.22.2).
+model = [
+    "torch==2.12.0",
+    "torchvision==0.27.0",
+    "transformers==5.22.2",
+    "tokenizers==0.23.3",
+    "safetensors==0.8.0",
+    # Pillow does the resize the model sees (recognition.normalize): keep the validated one
+    "pillow==12.2.0",
+]
+otel = [
+    "opentelemetry-sdk>=1.38",
+    "opentelemetry-exporter-otlp-proto-http>=1.38",
+    "opentelemetry-instrumentation-fastapi>=0.59b0",
+]
+
+[project.scripts]
+evilflowers-vlm = "evilflowers_vlm.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "httpx>=0.28",
+    "ruff>=0.14",
+    "mypy>=1.18",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evilflowers_vlm"]
+
+# CPU-only torch: the image must never pull CUDA wheels.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "BLE", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*", "transformers", "transformers.*"]
+ignore_missing_imports = true

@@ -1,0 +1,41 @@
+@startuml component-vlm-service
+!include elvira.iuml
+' =============================================================================
+' What: evilflowers-vlm-service is one FastAPI process that admits a bounded queue of formula batches and runs them one crop at a time on PaddleOCR-VL weights baked into the image.
+' Kind: UML component diagram. Scope: the service's own parts, its callers and its telemetry sinks; the k8s manifest is knowledge#67.
+' Source: src/evilflowers_vlm/{app,engine,recognition,telemetry,__main__}.py, Dockerfile; vault Deploy-a-Service, Shared-Inference; issues evilflowers-vlm-service#1, knowledge#67, evilflowers-equation-service#8 (2026-11-16)
+' =============================================================================
+
+title evilflowers-vlm-service: components (proposal, 2026-11-16)
+
+component "evilflowers-books-digitalizer\nformulas stage" as dig <<proposed>>
+component "evilflowers-equation-service\npaddleocr-vl backend" as eq <<proposed>>
+
+package "image ghcr.io/evilflowerscatalog/evilflowers-vlm-service" {
+  component "**app**\nFastAPI · :8000\nPOST /v1/formulas · /healthz · /readyz · /metrics" as app <<proposed>> <<focus>>
+  component "**ServiceState**\nadmission: 1 running + VLM_MAX_QUEUE waiting\nbeyond → 503 + Retry-After" as state <<proposed>>
+  component "**PaddleEngine**\nload() in a background thread\nrecognize(crop, task)" as engine <<proposed>>
+  component "**recognition**\nnormalize · load_model · generate" as rec <<proposed>>
+  component "**telemetry**\nOTel spans (off without endpoint)\nvlm_* Prometheus metrics · JSON logs" as tel <<proposed>>
+  artifact "/models/PaddleOCR-VL-1.6\n@132c45f5 · safetensors only" as weights
+}
+
+component "alloy-node\nOTLP/HTTP :4318" as alloy
+component "alloy-cluster\nk8s.grafana.com/scrape" as alloyc
+component "Loki · Mimir · Tempo" as lgtm
+
+dig -[$accent()]-> app : <b>HTTP POST /v1/formulas</b>\nitems[key, base64 PNG, task]
+eq --> app : HTTP POST /v1/formulas
+app --> state : admit / reject
+app --> engine : batch, one crop at a time
+engine --> rec : generate(crop, prompt)
+rec ..> weights : «read» offline
+app --> tel : span, metric, log calls
+tel --> alloy : OTLP spans
+alloy --> lgtm : traces, logs
+alloyc --> app : HTTP GET /metrics :8000 (scrape)
+alloyc --> lgtm : vlm_* metrics
+
+caption The digitalizer and the equation service both call one model process; a full queue answers 503 with Retry-After instead of timing out.
+footer ELVIRA · FIIT STU · evilflowers-vlm-service · docs/diagrams/component-vlm-service.puml
+@enduml

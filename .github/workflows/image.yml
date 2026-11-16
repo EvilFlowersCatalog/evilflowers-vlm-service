@@ -1,0 +1,90 @@
+# Lint, types and tests; build the image, smoke-test it read-only and offline, push it to GHCR.
+#
+#   push to main   → check, build, smoke, push  :main  :sha-<short>
+#   pull request   → check, build, smoke (no push)
+#   manual         → same as a push of the chosen branch (only main gets :main)
+#
+# Deploy is not here: the image is deployed by Ansible roles/inference in the knowledge
+# repository (EvilFlowersCatalog/knowledge#67), pinned by digest.
+#
+# Actions are pinned by commit SHA (tag in the comment), the same pins as knowledge's
+# intranet-image.yml; bump them deliberately.
+
+name: image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/evilflowerscatalog/evilflowers-vlm-service
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+      # the otel extra, so the tracing test runs; no torch (the model extra) in the dev loop
+      - name: Install
+        run: uv sync --frozen --extra otel
+      - name: Lint
+        run: uv run ruff check .
+      - name: Types
+        run: uv run mypy
+      - name: Tests
+        run: uv run pytest
+
+  image:
+    needs: check
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=main,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+      # Plain `docker build` (BuildKit): the image is ~3 GB, and a buildx container builder
+      # would hold it twice (builder + `load`) on the runner's disk.
+      - name: Build
+        run: docker build --label "org.opencontainers.image.revision=${{ github.sha }}" -t vlm:ci .
+      # The pod's conditions: read-only root, an emptyDir on /tmp, no network, uid 65534.
+      - name: Smoke test (read-only, offline, /readyz + one formula crop)
+        run: |
+          docker run --rm --read-only --tmpfs /tmp --network none --user 65534:65534 \
+            -v "$PWD/tests/smoke:/smoke:ro" vlm:ci python /smoke/smoke.py --serve
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push
+        if: github.event_name != 'pull_request'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          for tag in $TAGS; do
+            docker tag vlm:ci "$tag"
+            docker push "$tag"
+          done
+          echo "digest: $(docker inspect --format '{{index .RepoDigests 0}}' vlm:ci)" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,43 @@
+@startuml sequence-vlm-formulas
+!include elvira.iuml
+' =============================================================================
+' What: a POST /v1/formulas batch is admitted only while the queue has room, then holds the model for its whole batch and answers per-item results; beyond the queue the caller gets 503 with Retry-After.
+' Kind: UML sequence diagram. Scope: one request, from admission to response; model load and probes are notes.
+' Source: src/evilflowers_vlm/app.py, engine.py, telemetry.py; issue evilflowers-vlm-service#1 (2026-11-16)
+' =============================================================================
+
+title POST /v1/formulas (proposal, 2026-11-16)
+
+participant "caller\n(digitalizer, equation-service)" as caller
+participant "app\nFastAPI :8000" as app <<focus>>
+participant "ServiceState\nadmitted · lock" as state
+participant "PaddleEngine" as engine
+
+note over app, engine : At start-up the model loads in a background thread.\n/healthz = 200 at once (500 if the load failed); /readyz = 503 until the weights are in memory.
+
+caller -[$accent_msg()]> app : <b>POST /v1/formulas</b> items[≤32] (traceparent)
+activate app
+note right of app : SERVER span "POST /v1/formulas"
+alt model not loaded yet
+  app -> state : vlm_queue_rejections_total{reason=loading}++
+  app --> caller : 503 Retry-After: n "model is loading"
+else admitted > VLM_MAX_QUEUE
+  app -> state : vlm_queue_rejections_total{reason=busy}++
+  app --> caller : 503 Retry-After: n "busy: queue full"
+else admitted
+  app -> state : admitted++, await lock
+  note right of app : INTERNAL span "vlm.batch" (items)
+  loop each item, one crop at a time
+    app -> app : base64 → PNG (≤8 MB) → normalize
+    app -> engine : recognize(crop, task)
+    engine --> app : text | RuntimeError
+    app -> state : vlm_items_total{task,outcome}++, vlm_item_seconds
+  end
+  app -> state : release lock, admitted--
+  app --> caller : 200 {model, results[key, text|error, secs]}
+end
+deactivate app
+
+caption A busy service never makes the caller time out: it either runs the batch or answers 503 with a Retry-After sized from the recent request time.
+footer ELVIRA · FIIT STU · evilflowers-vlm-service · docs/diagrams/sequence-vlm-formulas.puml
+@enduml

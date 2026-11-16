@@ -1,0 +1,47 @@
+.idea/
+.venv/
+
+# Secrets — never commit credentials
+credentials.toml
+.mcp.json
+CREDENTIALS.md
+.env
+
+# Local data — scans are huge, keep them out of git
+.cache/
+output/
+output_local/
+data/
+# Generated catalog draft (regenerate with notebook 10)
+configs/catalog_template.xlsx
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Test / coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit.xml
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Zensical docs build output (zensical build -> ./site)
+site/
+
+# Studio SPA build / deps, Playwright scratch
+frontend/node_modules/
+frontend/dist/
+.playwright-mcp/
+
+# OS
+.DS_Store
